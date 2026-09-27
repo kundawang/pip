@@ -1,3 +1,4 @@
+import importlib.metadata
 import logging
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import pytest
 
 from pip._vendor.packaging.utils import NormalizedName, canonicalize_name
 
+from pip._internal.exceptions import InstallationError
 from pip._internal.metadata import (
     BaseDistribution,
     get_directory_distribution,
@@ -147,3 +149,28 @@ def test_trailing_slash_directory_metadata(
     dist = get_directory_distribution(path)
     assert dist.raw_name == dist.canonical_name == "foo"
     assert dist.location == str(tmp_path)
+
+
+def test_importlib_iter_entry_points_raises_installation_error(
+    tmp_path: Path,
+) -> None:
+    """The importlib backend converts ValueError into InstallationError.
+
+    Python 3.15+ validates entry points while parsing and raises ValueError
+    on invalid ones; simulate that here since older Pythons don't validate.
+    """
+    from pip._internal.metadata.importlib._dists import Distribution
+
+    info_dir = tmp_path / "simple-0.1.0.dist-info"
+    info_dir.mkdir()
+    info_dir.joinpath("METADATA").write_text("Name: simple\nVersion: 0.1.0\n")
+    dist = Distribution.from_directory(str(info_dir))
+
+    with mock.patch.object(
+        importlib.metadata.Distribution,
+        "entry_points",
+        new_callable=mock.PropertyMock,
+        side_effect=ValueError("Invalid entry point"),
+    ):
+        with pytest.raises(InstallationError, match="simple"):
+            dist.iter_entry_points()
